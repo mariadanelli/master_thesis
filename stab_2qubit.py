@@ -1,0 +1,94 @@
+import cvxpy as cp
+import numpy as np
+from sympy.physics.matrices import msigma
+from qiskit.quantum_info import Pauli, SparsePauliOp, Clifford
+import math
+from scipy.linalg import null_space
+from fractions import Fraction
+
+
+Z = Pauli('Z').to_matrix()
+X = Pauli('X').to_matrix()
+Y = Pauli('Y').to_matrix()
+I = np.eye(2, dtype=complex)
+
+single_paulis = [I, X, Y, Z]
+P_list = [np.kron(p1, p2) for p1 in single_paulis for p2 in single_paulis]
+P = np.array(P_list) 
+
+
+
+
+def format_coeff(c, tol=1e-9):
+    re, im = np.real(c), np.imag(c)
+    if abs(re) < tol: re = 0.0
+    if abs(im) < tol: im = 0.0
+    if re == 0.0 and im == 0.0:
+        return "0"
+
+    def num_str(val):
+        sign = "-" if val < 0 else ""
+        a = abs(val)
+        
+        for denom_label, scale in [("", 1.0), ("/√2", np.sqrt(2))]:
+            frac = Fraction(a * scale).limit_denominator(16)
+            if abs(a * scale - float(frac)) < 1e-7:
+                if denom_label == "":
+                    return f"{sign}{frac}"
+                else:
+                    num = "" if frac.numerator == 1 else f"{frac.numerator}"
+                    den = f"/{frac.denominator}" if frac.denominator != 1 else ""
+                    return f"{sign}{num}{denom_label}{den}"
+        return f"{val:.3f}"
+
+    if im == 0.0:
+        return num_str(re)
+    if re == 0.0:
+        s = num_str(im)
+        return ("i" if s == "1" else "-i" if s == "-1" else f"{s}i")
+    
+    im_s = num_str(im)
+    op = "+" if im > 0 else "-"
+    im_abs = im_s.lstrip("-")
+    im_part = "i" if im_abs == "1" else f"{im_abs}i"
+    return f"({num_str(re)} {op} {im_part})"
+
+def print_stabilizers_dirac(v_list):
+    basis = ["|00⟩", "|01⟩", "|10⟩", "|11⟩"]
+    for idx, vec in enumerate(v_list):
+        vec = vec.flatten()
+        terms = []
+        for amp, ket in zip(vec, basis):
+            s = format_coeff(amp)
+            if s != "0":
+                if s == "1":
+                    terms.append(ket)
+                elif s == "-1":
+                    terms.append(f"-{ket}")
+                else:
+                    terms.append(f"{s}{ket}")
+        expr = " + ".join(terms).replace("+ -", "- ")
+        print(f"σ[{idx:2d}]:  |{expr}⟩" if False else f"σ[{idx:2d}]:  {expr}")
+
+
+I4 = np.eye(4, dtype=complex)
+v = []
+
+def normalize_phase(vec, tol=1e-10):
+    idx = np.argmax(np.abs(vec) > tol)
+    return vec * (np.abs(vec[idx]) / vec[idx])
+
+for i in range(1, 16):
+    for j in range(i + 1, 16): #siccome S è composto da soli due elementi, perchè siano indipendenti, mi basta che siano diversi 
+        if np.allclose(P[i] @ P[j], P[j] @ P[i], atol=1e-10):
+            for s1 in (1, -1):
+                for s2 in (1, -1):
+                    sistema = np.vstack([s1 * P[i] - I4, s2 * P[j] - I4])
+                    ns = null_space(sistema, rcond=1e-10)
+                    if ns.shape[1] == 1: #nel caso di due (n=2) qubit con dim S=2  (l=2) dovrebbe essere sempre non degenre (k=0)
+                        psi = normalize_phase(ns[:, 0])
+                        if not any(np.allclose(psi, existing, atol=1e-10) for existing in v):
+                            v.append(psi)
+
+print(f"Totale stati stabilizzatori unici trovati: {len(v)}")
+print_stabilizers_dirac(v)
